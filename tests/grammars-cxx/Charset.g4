@@ -16,6 +16,7 @@
 // TEST-BUILD-CXX: --generator={grammar}Generator --includedir={tmpdir} --builddir={tmpdir}/build
 // TEST-GENERATE-CXX: {tmpdir}/build/bin/grammarinator-generate-{grammar_lower} -r start -o {tmpdir}/{grammar}%d.txt
 // TEST-ANTLR: {grammar}.g4 -o {tmpdir}
+// TEST-SKIP: encoding issue on Windows
 // TEST-REPARSE: -p {grammar}Parser -l {grammar}Lexer -r start {tmpdir}/{grammar}%d.txt
 
 grammar Charset;

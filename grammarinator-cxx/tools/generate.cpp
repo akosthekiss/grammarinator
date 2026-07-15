@@ -35,6 +35,7 @@ static const std::map<std::string, std::tuple<std::string, TreeCodec*(*)()>> tre
   {"flatbuffers", {"grtf", treecodec_factory<FlatBuffersTreeCodec>}},
   {"json", {"grtj", treecodec_factory<JsonTreeCodec>}},
 };
+static const std::string default_output_name = "id:%(id)d,src:%(src)s,op:%(op)s";
 
 // Trim from both ends (in place)
 inline void trim(std::string& s) {
@@ -105,8 +106,12 @@ int main(int argc, char **argv) {
        "NAME")
       ("o,out",
        "output file name pattern",
-       cxxopts::value<std::string>()->default_value((std::filesystem::current_path() / "tests" / "test_%d").string()),
+       cxxopts::value<std::string>()->default_value((std::filesystem::current_path() / "tests" / default_output_name).string()),
        "FILE")
+      ("outdir",
+       "output directory with the default file name pattern (" + default_output_name + ")",
+       cxxopts::value<std::string>(),
+       "DIR")
       ("stdout",
        "print test cases to stdout (alias for --out='')",
        cxxopts::value<bool>())
@@ -180,8 +185,17 @@ int main(int argc, char **argv) {
 
     FilePopulation *population = args.count("population") ? new FilePopulation(args["population"].as<std::string>(), tree_extension, *tree_codec) : nullptr;
     int seed = args.count("random-seed") ? args["random-seed"].as<int>() : std::random_device()();
+    if (args.count("stdout") && (args.count("out") || args.count("outdir"))) {
+      throw cxxopts::exceptions::parsing("--stdout cannot be used together with --out or --outdir");
+    }
+    if (args.count("outdir") && args.count("out")) {
+      throw cxxopts::exceptions::parsing("--outdir cannot be used together with --out");
+    }
+    std::string out_format = args.count("stdout") ? ""
+        : args.count("outdir") ? (std::filesystem::path(args["outdir"].as<std::string>()) / default_output_name).string()
+        : args["out"].as<std::string>();
     GeneratorTool generator(DefaultGeneratorFactory<GRAMMARINATOR_GENERATOR, GRAMMARINATOR_MODEL, GRAMMARINATOR_LISTENER>(weights, probs),  // generator_factory
-                            args.count("stdout") ? "" : args["out"].as<std::string>(),  // out_format
+                            out_format,  // out_format
                             args.count("rule") ? args["rule"].as<std::string>() : "",  // rule
                             RuleSize(args["max-depth"].as<int>(), args["max-tokens"].as<int>()),  // limit
                             population,  // population

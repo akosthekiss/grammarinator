@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace grammarinator {
@@ -72,11 +73,43 @@ public:
   GeneratorTool& operator=(GeneratorTool&& other) = delete;
   ~GeneratorTool() override = default;
 
+private:
+  static void replace_all(std::string& value, const std::string& from, const std::string& to) {
+    for (size_t pos = value.find(from); pos != std::string::npos; pos = value.find(from, pos + to.size())) {
+      value.replace(pos, from.size(), to);
+    }
+  }
+
+  std::string source_idx(runtime::Individual* individual) const {
+    if (!individual) {
+      return "-";
+    }
+    auto source = individual->source();
+    if (source.starts_with("id:")) {
+      auto comma = source.find(',');
+      return source.substr(3, comma == std::string::npos ? std::string::npos : comma - 3);
+    }
+    return source;
+  }
+
+  std::string format_output_name(int index, const std::string& source) const {
+    auto result = out_format;
+    replace_all(result, "%(id)d", std::to_string(index));
+    replace_all(result, "%(src)s", source);
+    replace_all(result, "%(op)s", this->last_mutator.empty() ? "-" : this->last_mutator);
+    replace_all(result, "%d", std::to_string(index));
+    return result;
+  }
+
+public:
   std::string create_test(int index) {
     grammarinator::runtime::Rule* root = nullptr;
+    std::string source;
     std::string test;
     for (int attempt = 1; attempt <= unique_attempts; ++attempt) {
-      root = create();
+      auto result = create();
+      root = result.first;
+      source = std::move(result.second);
       if (!root) {
         GRAMMARINATOR_LOG_WARN("Test case #{} attempt {}/{}: could not be generated.", index, attempt);
         continue;
@@ -99,11 +132,7 @@ public:
     std::string test_fn;
     if (!dry_run) {
       if (!out_format.empty()) {
-        test_fn = out_format;
-        size_t pos = test_fn.find("%d");
-        if (pos != std::string::npos) {
-          test_fn.replace(pos, 2, std::to_string(index));
-        }
+        test_fn = format_output_name(index, source);
         std::ofstream file(test_fn);
         file << test;
         file.close();
@@ -120,7 +149,7 @@ public:
     return test_fn;
   }
 
-  runtime::Rule* create() {
+  std::pair<runtime::Rule*, std::string> create() {
     runtime::Individual* individual1 = nullptr;
     runtime::Individual* individual2 = nullptr;
     if (this->population && !this->population->empty()) {
@@ -136,12 +165,13 @@ public:
       creators.insert(this->recombiners.begin(), this->recombiners.end());
     }
     auto root = this->create_tree(creators, individual1, individual2);
+    auto source = source_idx(individual1);
     if (individual1 && root && individual1->root() == root) {
       root = root->clone();  // FIXME: this is expensive
     }
     delete individual1;
     delete individual2;
-    return root;
+    return {root, source};
   }
 };
 

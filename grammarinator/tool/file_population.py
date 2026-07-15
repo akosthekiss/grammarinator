@@ -12,7 +12,7 @@ import logging
 import os
 import random
 
-from os.path import basename, join
+from os.path import basename, join, splitext
 
 from ..runtime import Annotations, Individual, Population, Rule
 from .tree_codec import AnnotatedTreeCodec, PickleTreeCodec, TreeCodec
@@ -102,6 +102,13 @@ class FileIndividual(Individual):
         super().__init__()
         self._population: FilePopulation = population
         self._name: str = name
+
+    @property
+    def source(self) -> str:
+        """
+        Return the file stem identifying the source individual.
+        """
+        return splitext(basename(self._name))[0]
 
     @property
     def root(self) -> Rule:

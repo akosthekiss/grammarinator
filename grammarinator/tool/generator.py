@@ -216,6 +216,7 @@ class GeneratorTool:
         self._encoding = encoding
         self._errors = errors
         self._dry_run = dry_run
+        self._last_mutator = '-'
 
         self.allowlist = allowlist or []
         self.blocklist = blocklist or []
@@ -258,6 +259,27 @@ class GeneratorTool:
         if creator_name not in self.blocklist and (not self.allowlist or creator_name in self.allowlist):
             creator_map.append(creator)
 
+    def _format_output_name(self, index: int, source: str) -> str:
+        """
+        Format the output file name from the test id, source and mutator name.
+        """
+        values = {'id': index, 'src': source, 'op': self._last_mutator}
+        if '%(' in self._out_format:
+            return self._out_format % values
+        return self._out_format % index if '%d' in self._out_format else self._out_format
+
+    def _source_idx(self, individual: Individual | None) -> str:
+        """
+        Return an AFL-like source id from the selected population individual.
+        """
+        if not individual:
+            return '-'
+
+        source = individual.source
+        if source.startswith('id:'):
+            return source[3:].split(',', maxsplit=1)[0]
+        return source
+
     def print_mutator(self, fmt: str, *args) -> None:
         logger.debug('GrammarinatorMutator [%s]', fmt.format(*args))
 
@@ -276,7 +298,7 @@ class GeneratorTool:
             saved.
         """
         for attempt in range(1, self._unique_attempts + 1):
-            root = self.create()
+            root, source = self.create()
             if not root:
                 logger.debug("test case #%d, attempt %d/%d: could not be generated", index, attempt, self._unique_attempts)
                 continue
@@ -287,7 +309,7 @@ class GeneratorTool:
         if self._dry_run or not root:
             return None
 
-        test_fn = self._out_format % index if '%d' in self._out_format else self._out_format
+        test_fn = self._format_output_name(index, source)
 
         if self._population is not None and self._keep_trees:
             self._population.add_individual(root, path=test_fn)
@@ -330,6 +352,7 @@ class GeneratorTool:
                 logger.trace("Original test: '%s'", self._serializer(individual1.root))
             root = creator(individual1, individual2)
             if root:
+                self._last_mutator = creator.__name__
                 break
             creators.remove(creator)
         else:
@@ -340,14 +363,14 @@ class GeneratorTool:
             root = transformer(root)
         return root
 
-    def create(self) -> Rule | None:
+    def create(self) -> tuple[Rule | None, str]:
         """
         Create a new tree with a randomly selected generator method from the
         available options (see :meth:`generate`, :meth:`mutate`, and
         :meth:`recombine`). The generated tree is also transformed according to
         the parameters used to initialize the current tool object.
 
-        :return: The root of the created tree.
+        :return: The root of the created tree and its source identifier.
         """
         individual1, individual2 = (self._ensure_individuals(None, None)) if self._population else (None, None)
         creators = []
@@ -355,7 +378,8 @@ class GeneratorTool:
         if self._population:
             creators.extend(self._mutators)
             creators.extend(self._recombiners)
-        return self._create_tree(creators, individual1, individual2)
+        root = self._create_tree(creators, individual1, individual2)
+        return root, self._source_idx(individual1)
 
     def mutate(self, individual: Individual | None = None) -> Rule | None:
         """

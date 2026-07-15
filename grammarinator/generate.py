@@ -26,6 +26,9 @@ from .pkgdata import __version__
 from .runtime import RuleSize
 from .tool import DefaultGeneratorFactory, FilePopulation, GeneratorTool
 
+DEFAULT_OUTPUT_NAME = 'id:%(id)d,src:%(src)s,op:%(op)s'
+DEFAULT_OUTPUT_FORMAT = join(os.getcwd(), 'tests', DEFAULT_OUTPUT_NAME)
+
 
 def int_or_inf(value):
     return inf if value == 'inf' else int(value)
@@ -136,10 +139,12 @@ def execute():
     add_tree_format_argument(parser)
 
     # Auxiliary settings.
-    parser.add_argument('-o', '--out', metavar='FILE', default=join(os.getcwd(), 'tests', 'test_%d'),
-                        help='output file name pattern (default: %(default)s).')
-    parser.add_argument('--stdout', dest='out', action='store_const', const='', default=SUPPRESS,
-                        help='print test cases to stdout (alias for --out=%(const)r)')
+    parser.add_argument('-o', '--out', metavar='FILE', default=SUPPRESS,
+                        help=f'output file name pattern (default: {DEFAULT_OUTPUT_FORMAT.replace("%", "%%")}).')
+    parser.add_argument('--outdir', metavar='DIR',
+                        help=f'output directory with the default file name pattern ({DEFAULT_OUTPUT_NAME.replace("%", "%%")}).')
+    parser.add_argument('--stdout', action='store_true',
+                        help="print test cases to stdout (alias for --out='')")
     parser.add_argument('-n', default=1, type=int_or_inf, metavar='NUM',
                         help='number of tests to generate, \'inf\' for continuous generation (default: %(default)s).')
     parser.add_argument('--memo-size', default=0, type=int, metavar='NUM',
@@ -158,6 +163,17 @@ def execute():
     add_log_level_argument(parser, short_alias=())
     add_version_argument(parser, version=__version__)
     args = parser.parse_args()
+
+    if args.stdout:
+        if hasattr(args, 'out') or args.outdir:
+            parser.error('--stdout cannot be used together with --out or --outdir')
+        args.out = ''
+    elif args.outdir:
+        if hasattr(args, 'out'):
+            parser.error('--outdir cannot be used together with --out')
+        args.out = join(args.outdir, DEFAULT_OUTPUT_NAME)
+    elif not hasattr(args, 'out'):
+        args.out = DEFAULT_OUTPUT_FORMAT
 
     init_logging()
     process_log_level_argument(args, logger)

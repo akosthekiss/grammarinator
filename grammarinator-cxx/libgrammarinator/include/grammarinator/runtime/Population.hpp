@@ -275,6 +275,9 @@ public:
     return root_->children.size() == 0 ? nullptr : root_->children[0];
   };
 
+  // Return the source identifier used when formatting generated output names.
+  virtual std::string source() const { return "-"; }
+
   Annotations* annotations() {
     if (!annot_) {
       annot_ = new Annotations(root());

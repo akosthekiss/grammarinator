@@ -40,6 +40,10 @@ public:
   FileIndividual& operator=(FileIndividual&& other) = delete;
   ~FileIndividual() override = default;
 
+  std::string source() const override {
+    return std::filesystem::path(name_).stem().string();
+  }
+
   runtime::Rule* root() override;
 };
 

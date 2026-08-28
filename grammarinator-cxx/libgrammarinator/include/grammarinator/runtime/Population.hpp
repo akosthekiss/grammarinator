@@ -275,8 +275,7 @@ public:
     return root_->children.size() == 0 ? nullptr : root_->children[0];
   };
 
-  // Return the source identifier used when formatting generated output names.
-  virtual std::string source() const { return "-"; }
+  virtual std::string name() const { return {}; }
 
   Annotations* annotations() {
     if (!annot_) {
@@ -296,7 +295,7 @@ public:
   virtual ~Population() = default;
 
   virtual bool empty() const = 0;
-  virtual void add_individual(Rule* root, const std::string& path = "") = 0;
+  virtual void add_individual(Rule* root, const std::string& name = "") = 0;
   virtual Individual* select_individual(Individual* recipient = nullptr) = 0;
 };
 

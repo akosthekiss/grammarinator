@@ -35,7 +35,7 @@ static const std::map<std::string, std::tuple<std::string, TreeCodec*(*)()>> tre
   {"flatbuffers", {"grtf", treecodec_factory<FlatBuffersTreeCodec>}},
   {"json", {"grtj", treecodec_factory<JsonTreeCodec>}},
 };
-static const std::string default_output_name = "id:%(id)d,src:%(src)s,op:%(op)s";
+static const std::string default_output_name = "id:{id},src:{src},op:{op}";
 
 // Trim from both ends (in place)
 inline void trim(std::string& s) {
@@ -105,13 +105,9 @@ int main(int argc, char **argv) {
        cxxopts::value<std::string>()->default_value("flatbuffers"),
        "NAME")
       ("o,out",
-       "output file name pattern",
-       cxxopts::value<std::string>()->default_value((std::filesystem::current_path() / "tests" / default_output_name).string()),
+       "output file name pattern (automatically appends " + default_output_name + " if ends with directory separator)",
+       cxxopts::value<std::string>()->default_value((std::filesystem::current_path() / "tests" / "").string()),
        "FILE")
-      ("outdir",
-       "output directory with the default file name pattern (" + default_output_name + ")",
-       cxxopts::value<std::string>(),
-       "DIR")
       ("stdout",
        "print test cases to stdout (alias for --out='')",
        cxxopts::value<bool>())
@@ -155,6 +151,18 @@ int main(int argc, char **argv) {
       exit(0);
     }
 
+    if (args.count("stdout") && args.count("out")) {
+      throw cxxopts::exceptions::parsing("--stdout cannot be used together with --out");
+    }
+    std::string out_format{};
+    if (!args.count("stdout")) {
+      auto out_path = std::filesystem::path(args["out"].as<std::string>());
+      if (!out_path.has_filename()) {
+        out_path /= default_output_name;
+      }
+      out_format = out_path.string();
+    }
+
     auto tree_format_it = tree_formats.find(args["tree-format"].as<std::string>());
     if (tree_format_it == tree_formats.end()) {
       throw cxxopts::exceptions::parsing("Invalid argument for option 'tree-format'");
@@ -185,15 +193,6 @@ int main(int argc, char **argv) {
 
     FilePopulation *population = args.count("population") ? new FilePopulation(args["population"].as<std::string>(), tree_extension, *tree_codec) : nullptr;
     int seed = args.count("random-seed") ? args["random-seed"].as<int>() : std::random_device()();
-    if (args.count("stdout") && (args.count("out") || args.count("outdir"))) {
-      throw cxxopts::exceptions::parsing("--stdout cannot be used together with --out or --outdir");
-    }
-    if (args.count("outdir") && args.count("out")) {
-      throw cxxopts::exceptions::parsing("--outdir cannot be used together with --out");
-    }
-    std::string out_format = args.count("stdout") ? ""
-        : args.count("outdir") ? (std::filesystem::path(args["outdir"].as<std::string>()) / default_output_name).string()
-        : args["out"].as<std::string>();
     GeneratorTool generator(DefaultGeneratorFactory<GRAMMARINATOR_GENERATOR, GRAMMARINATOR_MODEL, GRAMMARINATOR_LISTENER>(weights, probs),  // generator_factory
                             out_format,  // out_format
                             args.count("rule") ? args["rule"].as<std::string>() : "",  // rule

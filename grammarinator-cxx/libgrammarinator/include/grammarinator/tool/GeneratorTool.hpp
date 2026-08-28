@@ -10,6 +10,7 @@
 
 #include "../runtime/Population.hpp"
 #include "../runtime/Rule.hpp"
+#include "../util/fmt.hpp"
 #include "../util/print.hpp"
 #include "Tool.hpp"
 
@@ -31,7 +32,9 @@ public:
   using CreatorFn = typename Tool<GeneratorFactoryClass>::CreatorFn;
 
 private:
-  std::string out_format;
+  bool out_std;
+  std::filesystem::path out_dir;
+  std::string out_name;
   bool keep_trees;
   int unique_attempts;
   // bool cleanup;
@@ -56,14 +59,24 @@ public:
                                     allowlist, blocklist,
                                     transformers, serializer,
                                     memo_size),
-        out_format(out_format), keep_trees(keep_trees), unique_attempts(std::max(unique_attempts, 1)),
+        out_std(out_format.empty()), keep_trees(keep_trees), unique_attempts(std::max(unique_attempts, 1)),
         // cleanup(cleanup), encoding(encoding), errors(errors),
         dry_run(dry_run) {
-    if (!out_format.empty() && !dry_run) {
-      std::filesystem::path directoryPath = std::filesystem::absolute(std::filesystem::path(out_format).parent_path());
+    if (!out_std) {
+      std::string out_fmt = out_format;
+      // Convert old out format (index specified by %d) to new format (where
+      // named placeholders are allowed: {id}, {src}, and {op}).
+      if (const auto pos = out_fmt.find("%d"); pos != std::string::npos) {
+        out_fmt.replace(pos, 2, "{id}");
+      }
 
-      if (!std::filesystem::exists(directoryPath))
-        std::filesystem::create_directories(directoryPath);
+      std::filesystem::path out_path = out_fmt;
+      out_dir = out_path.parent_path();
+      out_name = out_path.filename().string();
+
+      if (!dry_run) {
+        std::filesystem::create_directories(out_dir);
+      }
     }
   }
 
@@ -73,43 +86,12 @@ public:
   GeneratorTool& operator=(GeneratorTool&& other) = delete;
   ~GeneratorTool() override = default;
 
-private:
-  static void replace_all(std::string& value, const std::string& from, const std::string& to) {
-    for (size_t pos = value.find(from); pos != std::string::npos; pos = value.find(from, pos + to.size())) {
-      value.replace(pos, from.size(), to);
-    }
-  }
-
-  std::string source_idx(runtime::Individual* individual) const {
-    if (!individual) {
-      return "-";
-    }
-    auto source = individual->source();
-    if (source.starts_with("id:")) {
-      auto comma = source.find(',');
-      return source.substr(3, comma == std::string::npos ? std::string::npos : comma - 3);
-    }
-    return source;
-  }
-
-  std::string format_output_name(int index, const std::string& source) const {
-    auto result = out_format;
-    replace_all(result, "%(id)d", std::to_string(index));
-    replace_all(result, "%(src)s", source);
-    replace_all(result, "%(op)s", this->last_mutator.empty() ? "-" : this->last_mutator);
-    replace_all(result, "%d", std::to_string(index));
-    return result;
-  }
-
 public:
   std::string create_test(int index) {
-    grammarinator::runtime::Rule* root = nullptr;
-    std::string source;
+    runtime::Rule* root = nullptr;
     std::string test;
     for (int attempt = 1; attempt <= unique_attempts; ++attempt) {
-      auto result = create();
-      root = result.first;
-      source = std::move(result.second);
+      root = create();
       if (!root) {
         GRAMMARINATOR_LOG_WARN("Test case #{} attempt {}/{}: could not be generated.", index, attempt);
         continue;
@@ -131,8 +113,16 @@ public:
 
     std::string test_fn;
     if (!dry_run) {
-      if (!out_format.empty()) {
-        test_fn = format_output_name(index, source);
+      std::string test_name;
+      if (!out_std) {
+        const auto args = util::unfmt(out_name, this->last_individual);
+        auto src = args.contains("id") ? args.at("id") : this->last_individual;
+        test_name = util::fmt(out_name,
+                              util::fmtarg("id", index),
+                              util::fmtarg("src", !src.empty() ? src : "-"),
+                              util::fmtarg("op", !this->last_mutator.empty() ? this->last_mutator : "-"));
+
+        test_fn = (out_dir / test_name).string();
         std::ofstream file(test_fn);
         file << test;
         file.close();
@@ -141,7 +131,7 @@ public:
       }
 
       if (this->population && keep_trees) {
-        this->population->add_individual(root, test_fn);
+        this->population->add_individual(root, test_name);
       }
     }
 
@@ -149,7 +139,7 @@ public:
     return test_fn;
   }
 
-  std::pair<runtime::Rule*, std::string> create() {
+  runtime::Rule* create() {
     runtime::Individual* individual1 = nullptr;
     runtime::Individual* individual2 = nullptr;
     if (this->population && !this->population->empty()) {
@@ -165,13 +155,12 @@ public:
       creators.insert(this->recombiners.begin(), this->recombiners.end());
     }
     auto root = this->create_tree(creators, individual1, individual2);
-    auto source = source_idx(individual1);
     if (individual1 && root && individual1->root() == root) {
       root = root->clone();  // FIXME: this is expensive
     }
     delete individual1;
     delete individual2;
-    return {root, source};
+    return root;
   }
 };
 

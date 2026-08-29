@@ -35,7 +35,8 @@ static const std::map<std::string, std::tuple<std::string, TreeCodec*(*)()>> tre
   {"flatbuffers", {"grtf", treecodec_factory<FlatBuffersTreeCodec>}},
   {"json", {"grtj", treecodec_factory<JsonTreeCodec>}},
 };
-static const std::string default_output_name = "id:{id},src:{src},op:{op}";
+
+static const std::string default_output_name = "id={id},src={src},op={op}";
 
 // Trim from both ends (in place)
 inline void trim(std::string& s) {

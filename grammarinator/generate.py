@@ -27,7 +27,7 @@ from .runtime import RuleSize
 from .tool import DefaultGeneratorFactory, FilePopulation, GeneratorTool
 
 
-DEFAULT_OUTPUT_NAME = 'id:{id},src:{src},op:{op}'
+DEFAULT_OUTPUT_NAME = 'id={id},src={src},op={op}'
 
 
 def int_or_inf(value):

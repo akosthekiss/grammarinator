@@ -86,11 +86,12 @@ class Individual:
         return self._root
 
     @property
-    def source(self) -> str:
+    def name(self) -> str | None:
         """
-        Return the source identifier used when formatting generated output names.
+        Return the filename of the test case corresponding to the tree, if it
+        exists.
         """
-        return '-'
+        return None
 
     @property
     def annotations(self) -> Annotations:

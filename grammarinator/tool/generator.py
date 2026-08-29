@@ -10,8 +10,9 @@ import random
 
 from contextlib import nullcontext
 from copy import deepcopy
-from os.path import abspath, dirname
+from os.path import abspath, basename, dirname, join
 from shutil import rmtree
+from string import Formatter
 from typing import Callable, Sequence
 
 import xxhash
@@ -145,10 +146,14 @@ class GeneratorTool:
         :param rule: Name of the rule to start generation from (default: the
             default rule of the generator).
         :param out_format: Test output description. It can be a file path
-            pattern possibly including the ``%d`` placeholder which will be
-            replaced by the index of the test case. Otherwise, it can be an
-            empty string, which will result in printing the test case to the
-            stdout (i.e., not saving to file system).
+            pattern possibly including the ``{id}``, ``{src}``, and ``{op}``
+            placeholders which will be replaced by the index of the test case,
+            the index of the test case that the current test case is based on,
+            and the name of the (mutation) operator that produced the test case.
+            For backward compatibility, it may include the ``%d`` placeholder,
+            which is equivalent to ``{id}``. It can also be an empty string,
+            which will result in printing the test case to the stdout (i.e., not
+            saving to file system).
         :param lock: Lock object necessary when printing test cases in parallel
             (optional).
         :type lock: :class:`multiprocessing.Lock` | None
@@ -198,10 +203,19 @@ class GeneratorTool:
         self._serializer = serializer or str
         self._rule = rule
 
-        if out_format and not dry_run:
-            os.makedirs(abspath(dirname(out_format)), exist_ok=True)
+        self._out_std = not out_format
+        if not self._out_std:
+            # Convert old out format (index specified by %d) to new format
+            # (where named placeholders are allowed: {id}, {src}, and {op}).
+            out_format = out_format.replace('%d', '{id}', 1)
+            self._out_dir = dirname(out_format)
+            self._out_name = basename(out_format)
 
-        self._out_format = out_format
+            if not dry_run:
+                os.makedirs(abspath(self._out_dir), exist_ok=True)
+        else:
+            self._out_dir, self._out_name = '', ''
+
         self._lock = lock or nullcontext()
         self._limit = limit or RuleSize.max
         self._population = population
@@ -216,7 +230,8 @@ class GeneratorTool:
         self._encoding = encoding
         self._errors = errors
         self._dry_run = dry_run
-        self._last_mutator = '-'
+        self._last_mutator = ''
+        self._last_individual = ''
 
         self.allowlist = allowlist or []
         self.blocklist = blocklist or []
@@ -252,33 +267,100 @@ class GeneratorTool:
         Delete the output directory if the tests were saved to files and if
         ``cleanup`` was enabled.
         """
-        if self._cleanup and self._out_format and not self._dry_run:
-            rmtree(dirname(self._out_format))
+        if self._cleanup and not self._out_std and not self._dry_run:
+            rmtree(self._out_dir)
 
     def _allow_creator(self, creator_map: list[Callable[[Individual | None, Individual | None], Rule | None]], creator_name: str, creator: Callable[[Individual | None, Individual | None], Rule | None]):
         if creator_name not in self.blocklist and (not self.allowlist or creator_name in self.allowlist):
             creator_map.append(creator)
 
-    def _format_output_name(self, index: int, source: str) -> str:
-        """
-        Format the output file name from the test id, source and mutator name.
-        """
-        values = {'id': index, 'src': source, 'op': self._last_mutator}
-        if '%(' in self._out_format:
-            return self._out_format % values
-        return self._out_format % index if '%d' in self._out_format else self._out_format
+    @staticmethod
+    def _unfmt(format_string: str, text: str) -> dict[str, str]:
+        result: dict[str, str] = {}
 
-    def _source_idx(self, individual: Individual | None) -> str:
-        """
-        Return an AFL-like source id from the selected population individual.
-        """
-        if not individual:
-            return '-'
+        names: list[str] = []
+        delimiters: list[str | None] = []
 
-        source = individual.source
-        if source.startswith('id:'):
-            return source[3:].split(',', maxsplit=1)[0]
-        return source
+        prefix = ''
+        pending_literal = ''
+        format_complete = False
+
+        try:
+            for literal, field_name, _, _ in Formatter().parse(format_string):
+                pending_literal += literal
+
+                if field_name is None:
+                    continue
+
+                # The accumulated literal terminates the preceding field.
+                if names:
+                    delimiters[-1] = pending_literal
+                else:
+                    prefix = pending_literal
+                pending_literal = ''
+
+                # Automatic fields such as '{}' have no usable dictionary key.
+                if not field_name:
+                    break
+
+                names.append(field_name)
+                delimiters.append(None)
+            else:
+                format_complete = True
+        except ValueError:
+            # Preserve the fields parsed before the malformed part.
+            pass
+
+        if format_complete and names:
+            delimiters[-1] = pending_literal
+
+        if not names or not text.startswith(prefix):
+            return result
+
+        text_position = len(prefix)
+        field_index = 0
+
+        while field_index < len(names):
+            group_end = field_index
+
+            # Consecutive placeholders without a literal separator form a group.
+            while True:
+                delimiter = delimiters[group_end]
+
+                # The format ended or became invalid before the field boundary
+                # could be determined.
+                if delimiter is None:
+                    return result
+
+                if delimiter or group_end + 1 == len(names):
+                    break
+
+                group_end += 1
+
+            if group_end + 1 == len(names):
+                # The delimiter after the final group is the format suffix.
+                if len(delimiter) > len(text) - text_position or not text.endswith(delimiter):
+                    return result
+
+                value_end = len(text) - len(delimiter)
+            else:
+                value_end = text.find(delimiter, text_position)
+
+                if value_end < 0:
+                    return result
+
+            # The first placeholder greedily receives the complete group value.
+            result[names[field_index]] = text[text_position:value_end]
+
+            # Remaining placeholders in the group receive empty values.
+            # Later occurrences overwrite earlier occurrences.
+            for index in range(field_index + 1, group_end + 1):
+                result[names[index]] = ''
+
+            text_position = value_end + len(delimiter)
+            field_index = group_end + 1
+
+        return result
 
     def print_mutator(self, fmt: str, *args) -> None:
         logger.debug('GrammarinatorMutator [%s]', fmt.format(*args))
@@ -298,7 +380,7 @@ class GeneratorTool:
             saved.
         """
         for attempt in range(1, self._unique_attempts + 1):
-            root, source = self.create()
+            root = self.create()
             if not root:
                 logger.debug("test case #%d, attempt %d/%d: could not be generated", index, attempt, self._unique_attempts)
                 continue
@@ -309,10 +391,13 @@ class GeneratorTool:
         if self._dry_run or not root:
             return None
 
-        test_fn = self._format_output_name(index, source)
+        test_name = self._out_name.format(id=index,
+                                          src=self._unfmt(self._out_name, self._last_individual).get('id', self._last_individual) or '-',
+                                          op=self._last_mutator or '-')
+        test_fn = join(self._out_dir, test_name)
 
         if self._population is not None and self._keep_trees:
-            self._population.add_individual(root, path=test_fn)
+            self._population.add_individual(root, path=test_name)
 
         if test_fn:
             with open(test_fn, 'w', encoding=self._encoding, errors=self._errors, newline='') as f:
@@ -353,6 +438,7 @@ class GeneratorTool:
             root = creator(individual1, individual2)
             if root:
                 self._last_mutator = creator.__name__
+                self._last_individual = individual1.name or '' if individual1 else ''
                 break
             creators.remove(creator)
         else:
@@ -363,14 +449,14 @@ class GeneratorTool:
             root = transformer(root)
         return root
 
-    def create(self) -> tuple[Rule | None, str]:
+    def create(self) -> Rule | None:
         """
         Create a new tree with a randomly selected generator method from the
         available options (see :meth:`generate`, :meth:`mutate`, and
         :meth:`recombine`). The generated tree is also transformed according to
         the parameters used to initialize the current tool object.
 
-        :return: The root of the created tree and its source identifier.
+        :return: The root of the created tree.
         """
         individual1, individual2 = (self._ensure_individuals(None, None)) if self._population else (None, None)
         creators = []
@@ -378,8 +464,7 @@ class GeneratorTool:
         if self._population:
             creators.extend(self._mutators)
             creators.extend(self._recombiners)
-        root = self._create_tree(creators, individual1, individual2)
-        return root, self._source_idx(individual1)
+        return self._create_tree(creators, individual1, individual2)
 
     def mutate(self, individual: Individual | None = None) -> Rule | None:
         """
